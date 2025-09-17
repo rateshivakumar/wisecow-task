@@ -1,0 +1,68 @@
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_REGISTRY    = 'https://index.docker.io/v1/'
+        DOCKER_CREDENTIALS = 'dockerhub-cred'       // Jenkins Docker Hub credentials ID
+        DOCKER_IMAGE       = 'rateshivakumar/wisecow'  // Docker Hub repo
+        DOCKERFILE_PATH    = '.'                     // Repo root where Dockerfile exists
+        KUBE_DEPLOY_FILE   = 'wisecow-deploy.yaml'  // Kubernetes deployment YAML
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                git branch: 'main', url: 'https://github.com/kartheekchadaram12/Wisecow-Project.git'
+            }
+        }
+
+        stage('Build & Push Docker Image') {
+            steps {
+                script {
+                    sh 'docker system prune -af || true'
+                    docker.withRegistry("${DOCKER_REGISTRY}", "${DOCKER_CREDENTIALS}") {
+                        def image = docker.build("${DOCKER_IMAGE}:${BUILD_NUMBER}", "${DOCKERFILE_PATH}")
+                        image.push()
+                        image.push("latest")
+                    }
+                }
+            }
+        }
+
+        stage('Deploy Container Locally') {
+            steps {
+                script {
+                    sh 'docker rm -f wisecow || true'
+                    sh "docker run -d --name wisecow -p 4499:4499 ${DOCKER_IMAGE}:${BUILD_NUMBER}"
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                script {
+                    // Apply Kubernetes deployment YAML
+                    sh "kubectl apply -f ${KUBE_DEPLOY_FILE}"
+                    // Optionally, expose as NodePort
+                    sh "kubectl expose deployment wisecow --type=NodePort --port=4499 || true"
+                }
+            }
+        }
+
+        stage('Archive Artifacts') {
+            steps {
+                archiveArtifacts artifacts: 'Dockerfile, wisecow.sh, wisecow-deploy.yaml', fingerprint: true
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Pipeline finished successfully"
+        }
+        failure {
+            echo "❌ Pipeline failed"
+        }
+    }
+}
